@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getDb, makeId } from "@/lib/db";
+import { getDb, ensureDefaultUser, makeId, DEFAULT_USER_ID } from "@/lib/db";
 
 export async function GET(req: Request) {
   try {
@@ -7,11 +7,16 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const userId = searchParams.get("user_id");
 
-    const rows = userId
-      ? db.prepare("SELECT * FROM scripts WHERE user_id = ? ORDER BY created_at DESC").all(userId)
-      : db.prepare("SELECT * FROM scripts ORDER BY created_at DESC").all();
+    let query = db
+      .from("scripts")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (userId) query = query.eq("user_id", userId);
 
-    return NextResponse.json(rows);
+    const { data, error } = await query;
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    return NextResponse.json(data ?? []);
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }
@@ -24,12 +29,21 @@ export async function POST(req: Request) {
     const id = makeId();
     const now = new Date().toISOString();
 
-    db.prepare(
-      `INSERT INTO scripts (id, user_id, lead_id, type, content, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(id, body.user_id || "default", body.lead_id || null, body.type || "WHATSAPP", body.content || "", now);
+    await ensureDefaultUser();
 
-    return NextResponse.json({ id, ...body }, { status: 201 });
+    const row = {
+      id,
+      user_id: body.user_id || DEFAULT_USER_ID,
+      lead_id: body.lead_id || null,
+      type: body.type || "WHATSAPP",
+      content: body.content || "",
+      created_at: now,
+    };
+
+    const { error } = await db.from("scripts").insert(row);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    return NextResponse.json(row, { status: 201 });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }

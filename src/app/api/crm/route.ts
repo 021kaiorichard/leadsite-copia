@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getDb, makeId } from "@/lib/db";
+import { getDb, ensureDefaultUser, makeId, DEFAULT_USER_ID } from "@/lib/db";
 
 export async function GET(req: Request) {
   try {
@@ -7,11 +7,16 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const userId = searchParams.get("user_id");
 
-    const rows = userId
-      ? db.prepare("SELECT * FROM crm_items WHERE user_id = ? ORDER BY created_at DESC").all(userId)
-      : db.prepare("SELECT * FROM crm_items ORDER BY created_at DESC").all();
+    let query = db
+      .from("crm_items")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (userId) query = query.eq("user_id", userId);
 
-    return NextResponse.json(rows);
+    const { data, error } = await query;
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    return NextResponse.json(data ?? []);
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }
@@ -24,12 +29,22 @@ export async function POST(req: Request) {
     const id = makeId();
     const now = new Date().toISOString();
 
-    db.prepare(
-      `INSERT INTO crm_items (id, user_id, lead_id, stage_id, notes, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(id, body.user_id || "default", body.lead_id, body.stage_id, body.notes || null, now, now);
+    await ensureDefaultUser();
 
-    return NextResponse.json({ id, ...body }, { status: 201 });
+    const row = {
+      id,
+      user_id: body.user_id || DEFAULT_USER_ID,
+      lead_id: body.lead_id || null,
+      stage_id: body.stage_id || "",
+      notes: body.notes || null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    const { error } = await db.from("crm_items").insert(row);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    return NextResponse.json(row, { status: 201 });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }

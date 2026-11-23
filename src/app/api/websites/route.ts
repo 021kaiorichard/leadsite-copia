@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getDb, makeId } from "@/lib/db";
+import { getDb, ensureDefaultUser, makeId, DEFAULT_USER_ID } from "@/lib/db";
 
 export async function GET(req: Request) {
   try {
@@ -7,11 +7,16 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const userId = searchParams.get("user_id");
 
-    const rows = userId
-      ? db.prepare("SELECT * FROM websites WHERE user_id = ? ORDER BY created_at DESC").all(userId)
-      : db.prepare("SELECT * FROM websites ORDER BY created_at DESC").all();
+    let query = db
+      .from("websites")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (userId) query = query.eq("user_id", userId);
 
-    return NextResponse.json(rows);
+    const { data, error } = await query;
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    return NextResponse.json(data ?? []);
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }
@@ -24,26 +29,28 @@ export async function POST(req: Request) {
     const id = makeId();
     const now = new Date().toISOString();
 
-    db.prepare(
-      `INSERT INTO websites (id, user_id, lead_id, title, subtitle, slug, address, published, content, theme, version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      id,
-      body.user_id || "default",
-      body.lead_id || null,
-      body.title || "",
-      body.subtitle || null,
-      body.slug || "",
-      body.address || null,
-      body.published ? 1 : 0,
-      JSON.stringify(body.content || {}),
-      body.theme || "default",
-      body.version || 1,
-      now,
-      now
-    );
+    await ensureDefaultUser();
 
-    return NextResponse.json({ id, ...body }, { status: 201 });
+    const row = {
+      id,
+      user_id: body.user_id || DEFAULT_USER_ID,
+      lead_id: body.lead_id || null,
+      title: body.title || "",
+      subtitle: body.subtitle || null,
+      slug: body.slug || "",
+      address: body.address || null,
+      published: body.published ? 1 : 0,
+      content: JSON.stringify(body.content || {}),
+      theme: body.theme || "default",
+      version: body.version || 1,
+      created_at: now,
+      updated_at: now,
+    };
+
+    const { error } = await db.from("websites").insert(row);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    return NextResponse.json(row, { status: 201 });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }
